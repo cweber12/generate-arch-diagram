@@ -5,3 +5,5 @@ routes.json
 callgraph.json
 .venv/
 venv/
+callgraph.json
+routes.json

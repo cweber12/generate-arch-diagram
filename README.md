@@ -1,24 +1,86 @@
-# ARCH DIAGRAM GENERATION
 
-## ADD FUNCTION TO POWERSHELL PROFILE
+# Architecture Diagram Service
 
-### CREATE POWERSHELL PROFILE
+Generate architecture diagrams for FastAPI projects using static analysis and route inspection. This service provides a REST API to generate Mermaid diagrams and SVGs from your Python codebase, visualizing endpoints and call graphs.
 
-```bash
-if (-not (Test-Path -Path $PROFILE)) {                        
+---
+
+## Requirements
+
+- Python 3.10+
+- FastAPI
+- Mermaid CLI (`mmdc`) for SVG rendering (install via `npm i -g @mermaid-js/mermaid-cli`)
+- Node.js (for Mermaid CLI)
+- Other dependencies listed in `requirements.txt`
+
+## Setup
+
+1. Clone the repository:
+
+   ```powershell
+   git clone <repo-url>
+   cd GenerateDiagram
+   ```
+
+2. Install Python dependencies:
+
+   ```powershell
+   pip install -r requirements.txt
+   ```
+
+3. Install Mermaid CLI (for SVG output):
+
+   ```powershell
+   npm install -g @mermaid-js/mermaid-cli
+   ```
+
+4. Generate an API key and its SHA256 hash:
+
+  See the section below for details.
+
+---
+
+## Generating an API Key
+
+To generate a secure API key and its SHA256 hash for server authentication, use the provided script:
+
+```powershell
+python scripts/gen_key.py
+```
+
+This will output something like:
+
+```txt
+API_KEY to give users: <your-random-api-key>
+API_KEY_SHA256 for server env: <sha256-hash>
+```
+
+- Provide the `API_KEY` to users/clients for authentication.
+- Set the `API_KEY_SHA256` value in your server's environment (e.g., in `.env` as `API_KEY_SHA256=<sha256-hash>`).
+
+---
+
+## Add Function to PowerShell Profile
+
+Add a function to your PowerShell profile to automatically make all necessary CLI calls.
+
+### Create PowerShell Profile
+
+```powershell
+if (-not (Test-Path -Path $PROFILE)) {
     New-Item -ItemType File -Path $PROFILE -Force | Out-Null
 }
 ```
 
-### EDIT PROFILE IN NOTEPAD
+### Edit Profile in Notepad
 
-```bash
-notepad $PROFILE 
+```powershell
+notepad $PROFILE
 ```
 
-### ADD FUNCTION
+### Add Function
 
-```bash
+```powershell
 function ArchDiagram {
   param(
     [string]$ApiBase    = "http://localhost:8911",
@@ -113,28 +175,31 @@ function ArchDiagram {
 }
 ```
 
-### RELOAD PROFILE
+### Reload Profile
 
-```bash
-. $PROFILE 
+```powershell
+. $PROFILE
 ```
 
-### CALLING THE ENDPOINT FROM THE PROJECT ROOT
+---
+
+### Calling the Endpoint from the Project Root
 
 #### Call graph only, scan the 'app' folder, save all files
 
-```bash
+```powershell
 New-ArchDiagram -ProjectDir "C:\Projects\RouteMap\backend_match" -PackageDir app -Prefix app -Render mermaid
 ```
 
 #### Include FastAPI routes as well (adjust to your real module path)
 
-```bash
+```powershell
 New-ArchDiagram -ProjectDir "C:\Projects\RouteMap\backend_match" -PackageDir app -Prefix app `
   -AppModule "app.main:app" -Render mermaid
 ```
 
 #### Ask the server for SVG too (requires Mermaid CLI configured on server)
 
-```bash
+```powershell
 New-ArchDiagram -ProjectDir "C:\Projects\RouteMap\backend_match" -PackageDir app -Prefix app -Render svg
+```
