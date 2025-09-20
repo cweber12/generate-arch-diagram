@@ -18,8 +18,8 @@ Generate architecture diagrams for FastAPI projects using static analysis and ro
 1. Clone the repository:
 
    ```powershell
-   git clone <repo-url>
-   cd GenerateDiagram
+   git clone https://github.com/cweber12/generate-arch-diagram.git
+   cd generate-arch-diagram
    ```
 
 2. Install Python dependencies:
