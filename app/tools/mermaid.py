@@ -7,13 +7,17 @@ APP_ROOT = Path(__file__).resolve().parents[1]
 routes_path = APP_ROOT / "routes.json"
 callgraph_path = APP_ROOT / "callgraph.json"
 
-MODE = os.getenv("MERMAID_MODE", "api")   # "api" | "nhops" | "full"
+# Controls (can be set by env)
+MODE = os.getenv("MERMAID_MODE", "api")         # "api" | "nhops" | "full"
 MAX_HOPS = int(os.getenv("MAX_HOPS", "1"))
+DIR = os.getenv("MERMAID_DIR", "TD")            # "TD" | "TB" | "LR" | "RL" | "BT"
+LABEL_MODE = os.getenv("LABEL_MODE", "short")   # "short" | "full"
+LABEL_DEPTH = int(os.getenv("LABEL_DEPTH", "2"))# how many trailing segments for "short"
+WRAP_BY_DOT = os.getenv("WRAP_BY_DOT", "1") == "1"  # replace '.' with <br/> to wrap
 
 def load_routes():
     if not routes_path.exists():
         return []
-    # Handle UTF-8 BOM if present
     with routes_path.open(encoding="utf-8-sig") as f:
         return json.load(f)
 
@@ -25,14 +29,22 @@ def load_callgraph():
 
 _id_re = re.compile(r'[^A-Za-z0-9_]')
 def safe_id(s: str) -> str:
-    """Mermaid node IDs must be simple: letters, digits, underscore."""
     return _id_re.sub("_", s)
+
+def shorten_label(qualified: str) -> str:
+    if LABEL_MODE == "short":
+        parts = qualified.split(".")
+        if len(parts) > LABEL_DEPTH:
+            qualified = ".".join(parts[-LABEL_DEPTH:])
+    if WRAP_BY_DOT:
+        # turn "a.b.c" into "a<br/>b<br/>c" so nodes are taller not wider
+        return qualified.replace(".", "<br/>")
+    return qualified
 
 def esc_label(s: str) -> str:
     return s.replace('"', '\\"')
 
 def fn_node(fn: str) -> str:
-    # Many Python callgraph names include dots, colons, <locals>, etc.
     return f"FN_{safe_id(fn)}"
 
 def ep_node(method: str, path: str) -> str:
@@ -45,19 +57,18 @@ def main():
 
     out_edges = defaultdict(set)
     for e in edges:
-        c, d = e["caller"], e["callee"]
-        out_edges[c].add(d)
+        out_edges[e["caller"]].add(e["callee"])
 
     lines = []
     lines += [
-        "flowchart TD",
+        f"flowchart {DIR}",
         "classDef endpoint fill:#eef,stroke:#88a,stroke-width:1px;",
         "classDef handler  fill:#efe,stroke:#6a6,stroke-width:1px;",
         "classDef data     fill:#fee,stroke:#c88,stroke-width:1px;",
         "classDef tag      fill:#eee,stroke:#bbb,stroke-dasharray: 3 3;",
         "classDef dep      fill:#fff4cc,stroke:#c7a84f,stroke-width:1px;",
         "",
-        "%% Tag nodes (one per tag)"
+        "%% Tag nodes"
     ]
 
     # tags
@@ -79,18 +90,18 @@ def main():
             hnode = fn_node(handler)
             handler_nodes.add(handler)
 
-            lines.append(f'{ep}["{m} {esc_label(path)}"]:::endpoint')
-            lines.append(f'{hnode}["{esc_label(handler)}"]:::handler')
+            ep_label = f"{m} {path}"
+            h_label = shorten_label(handler)
+
+            lines.append(f'{ep}["{esc_label(ep_label)}"]:::endpoint')
+            lines.append(f'{hnode}["{esc_label(h_label)}"]:::handler')
             lines.append(f'{ep} --> {hnode}')
 
-            fpath, line = r.get("endpoint_file"), r.get("endpoint_line")
-            if fpath and line:
-                # quotes already escaped in label; URL is plain
-                lines.append(f'click {hnode} "file:///{fpath}#L{line}" "Open source"')
-
+            # tag association
             for t in (r.get("tags") or []):
                 lines.append(f'{ep} --- {tag_nodes[t]}')
 
+    # callgraph overlay
     def add_edge(u, v):
         lines.append(f'{fn_node(u)} --> {fn_node(v)}')
 
@@ -115,7 +126,7 @@ def main():
                 if key not in seen:
                     seen.add(key)
                     q.append((nxt, dist + 1))
-    else:  # MODE == "full"
+    else:  # full
         lines.append("\n%% Full callgraph edges")
         for e in edges:
             add_edge(e["caller"], e["callee"])
