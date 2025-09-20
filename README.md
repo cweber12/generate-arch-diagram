@@ -28,6 +28,7 @@ function ArchDiagram {
     [ValidateSet("mermaid","svg")] [string]$Render = "mermaid",
     [ValidateSet("api","nhops","full")] [string]$GraphMode = "api",
     [int]$MaxHops = 1,
+    [ValidateSet("TD","TB","LR","RL","BT")] [string]$Layout = "LR",
     [string]$AppModule
   )
 
@@ -41,6 +42,7 @@ function ArchDiagram {
     include_artifacts = $true
     graph_mode        = $GraphMode
     max_hops          = $MaxHops
+    layout_dir        = $Layout
   }
   if ($AppModule) { $payload.app_module = $AppModule }
 
@@ -58,18 +60,26 @@ function ArchDiagram {
   try {
     $resp = Invoke-RestMethod @params
 
+    # Optional: show SVG renderer error if server included one
+    if ($resp.svg_error) {
+      Write-Host "SVG render error (server):" -ForegroundColor Yellow
+      ($resp.svg_error | Out-String) | Write-Host
+    }
+
     if ($null -ne $resp.mermaid) {
       Set-Content -Path (Join-Path $ProjectDir "diagram.mmd") -Value $resp.mermaid -Encoding UTF8
       $mdText = @('```mermaid', ($resp.mermaid.TrimEnd()), '```') -join "`r`n"
       Set-Content -Path (Join-Path $ProjectDir "diagram.md") -Value $mdText -Encoding UTF8
       Write-Host "Wrote diagram.mmd, diagram.md" -ForegroundColor Green
     }
+
     if ($null -ne $resp.svg) {
       Set-Content -Path (Join-Path $ProjectDir "diagram.svg") -Value $resp.svg -Encoding UTF8
       Write-Host "Wrote diagram.svg" -ForegroundColor Green
     } elseif ($Render -eq "svg") {
       Write-Host "Server did not return SVG (is Mermaid CLI available on server?). Saved .mmd/.md." -ForegroundColor Yellow
     }
+
     if ($resp.artifacts.'routes.json') {
       Set-Content -Path (Join-Path $ProjectDir "routes.json") -Value $resp.artifacts.'routes.json' -Encoding UTF8
       Write-Host "Wrote routes.json" -ForegroundColor Green
@@ -78,9 +88,27 @@ function ArchDiagram {
       Set-Content -Path (Join-Path $ProjectDir "callgraph.json") -Value $resp.artifacts.'callgraph.json' -Encoding UTF8
       Write-Host "Wrote callgraph.json" -ForegroundColor Green
     }
-  } catch {
+  }
+  catch {
     Write-Host "Request failed:" -ForegroundColor Red
-    $_ | Out-String | Write-Host
+    # Print server error body (includes tool STDOUT/STDERR from your FastAPI _run())
+    try {
+      $respStream = $_.Exception.Response.GetResponseStream()
+      if ($respStream) {
+        $sr   = New-Object System.IO.StreamReader($respStream)
+        $body = $sr.ReadToEnd()
+        Write-Host "`n---- SERVER ERROR BODY ----`n$body" -ForegroundColor Yellow
+        # (Optional) Save to a local file for inspection
+        $errPath = Join-Path $ProjectDir "diagram_error.txt"
+        $body | Set-Content -Path $errPath -Encoding UTF8
+        Write-Host "Saved server error to $errPath" -ForegroundColor Yellow
+      } else {
+        $_ | Out-String | Write-Host
+      }
+    } catch {
+      $_ | Out-String | Write-Host
+    }
+    throw
   }
 }
 ```

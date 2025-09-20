@@ -7,13 +7,13 @@ APP_ROOT = Path(__file__).resolve().parents[1]
 routes_path = APP_ROOT / "routes.json"
 callgraph_path = APP_ROOT / "callgraph.json"
 
-# Controls (can be set by env)
+# Layout/env controls
 MODE = os.getenv("MERMAID_MODE", "api")         # "api" | "nhops" | "full"
 MAX_HOPS = int(os.getenv("MAX_HOPS", "1"))
-DIR = os.getenv("MERMAID_DIR", "TD")            # "TD" | "TB" | "LR" | "RL" | "BT"
+DIR = os.getenv("MERMAID_DIR", "LR")            # "LR" | "RL" | "TD" | "TB" | "BT"
 LABEL_MODE = os.getenv("LABEL_MODE", "short")   # "short" | "full"
-LABEL_DEPTH = int(os.getenv("LABEL_DEPTH", "2"))# how many trailing segments for "short"
-WRAP_BY_DOT = os.getenv("WRAP_BY_DOT", "1") == "1"  # replace '.' with <br/> to wrap
+LABEL_DEPTH = int(os.getenv("LABEL_DEPTH", "2"))# used when LABEL_MODE="short"
+WRAP_BY_DOT = os.getenv("WRAP_BY_DOT", "1") == "1"
 
 def load_routes():
     if not routes_path.exists():
@@ -37,11 +37,10 @@ def shorten_label(qualified: str) -> str:
         if len(parts) > LABEL_DEPTH:
             qualified = ".".join(parts[-LABEL_DEPTH:])
     if WRAP_BY_DOT:
-        # turn "a.b.c" into "a<br/>b<br/>c" so nodes are taller not wider
         return qualified.replace(".", "<br/>")
     return qualified
 
-def esc_label(s: str) -> str:
+def esc(s: str) -> str:
     return s.replace('"', '\\"')
 
 def fn_node(fn: str) -> str:
@@ -55,6 +54,7 @@ def main():
     cg = load_callgraph()
     edges = cg.get("edges", [])
 
+    # Build adjacency for callgraph overlay
     out_edges = defaultdict(set)
     for e in edges:
         out_edges[e["caller"]].add(e["callee"])
@@ -68,40 +68,62 @@ def main():
         "classDef tag      fill:#eee,stroke:#bbb,stroke-dasharray: 3 3;",
         "classDef dep      fill:#fff4cc,stroke:#c7a84f,stroke-width:1px;",
         "",
-        "%% Tag nodes"
+        "%% Routes will be stacked vertically on the left"
     ]
 
-    # tags
+    # 1) Tag nodes (one per tag)
     tag_nodes = {}
     for r in routes:
         for t in (r.get("tags") or []):
             if t not in tag_nodes:
                 tn = f"TAG_{safe_id(t)}"
-                lines.append(f'{tn}["tag: {esc_label(t)}"]:::tag')
+                lines.append(f'{tn}["tag: {esc(t)}"]:::tag')
                 tag_nodes[t] = tn
 
-    # endpoints + handlers
+    # 2) Endpoints subgraph (vertical stack on the left)
+    #    Define endpoint nodes *inside* this subgraph so they stay together.
+    ep_defs = []
+    ep_nodes = []
     handler_nodes = set()
+    handler_defs = {}  # handler -> definition line (emit once)
+
     for r in routes:
         path = r["path"]
         for m in r["methods"]:
             ep = ep_node(m, path)
+            ep_nodes.append(ep)
+            ep_label = f"{m} {path}"
+            ep_defs.append(f'{ep}["{esc(ep_label)}"]:::endpoint')
+
             handler = r["endpoint"]
             hnode = fn_node(handler)
             handler_nodes.add(handler)
+            if handler not in handler_defs:
+                h_label = shorten_label(handler)
+                handler_defs[handler] = f'{hnode}["{esc(h_label)}"]:::handler'
 
-            ep_label = f"{m} {path}"
-            h_label = shorten_label(handler)
+    # Emit the routes column on the left
+    lines.append('subgraph ROUTES["Routes"]')
+    lines.append('direction TB')  # stack top-to-bottom
+    lines.extend(ep_defs)
+    lines.append('end')
 
-            lines.append(f'{ep}["{esc_label(ep_label)}"]:::endpoint')
-            lines.append(f'{hnode}["{esc_label(h_label)}"]:::handler')
-            lines.append(f'{ep} --> {hnode}')
+    # 3) Handlers (define once, outside the subgraph)
+    lines.append("\n%% Handlers")
+    lines.extend(handler_defs.values())
 
-            # tag association
+    # 4) Edges: endpoints -> handlers, and tags to endpoints (dashed)
+    lines.append("\n%% Endpoint-to-handler edges")
+    for r in routes:
+        path = r["path"]
+        for m in r["methods"]:
+            ep = ep_node(m, path)
+            hnode = fn_node(r["endpoint"])
+            lines.append(f"{ep} --> {hnode}")
             for t in (r.get("tags") or []):
-                lines.append(f'{ep} --- {tag_nodes[t]}')
+                lines.append(f"{ep} --- {tag_nodes[t]}")  # keep weak tie to tags
 
-    # callgraph overlay
+    # 5) Callgraph overlay
     def add_edge(u, v):
         lines.append(f'{fn_node(u)} --> {fn_node(v)}')
 
@@ -113,9 +135,7 @@ def main():
     elif MODE == "nhops":
         lines.append(f"\n%% Call graph from handlers ({MAX_HOPS} hops)")
         seen = set()
-        q = deque()
-        for h in handler_nodes:
-            q.append((h, 0))
+        q = deque((h, 0) for h in handler_nodes)
         while q:
             cur, dist = q.popleft()
             if dist >= MAX_HOPS:

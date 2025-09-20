@@ -6,11 +6,10 @@ from typing import Optional
 from pathlib import Path
 import os, hashlib, secrets, tempfile, subprocess, zipfile, io, shutil
 
-# Load .env if present (API_KEY_SHA256, optional MMDC_PATH)
 from dotenv import load_dotenv, find_dotenv
 load_dotenv(find_dotenv(), override=False)
 
-app = FastAPI(title="Architecture Diagram Service", version="0.4.0")
+app = FastAPI(title="Architecture Diagram Service", version="0.5.0")
 
 # --------------------------- Auth ---------------------------
 API_KEY_HEADER = "X-API-Key"
@@ -27,8 +26,8 @@ def require_api_key(api_key: Optional[str] = Security(api_key_header)) -> None:
         raise HTTPException(401, "Invalid API key", headers={"WWW-Authenticate": "ApiKey"})
 
 # --------------------------- Paths --------------------------
-APP_ROOT = Path(__file__).resolve().parent      # .../GenerateDiagram/app
-TOOLS_DIR = APP_ROOT / "tools"                  # .../GenerateDiagram/app/tools
+APP_ROOT = Path(__file__).resolve().parent
+TOOLS_DIR = APP_ROOT / "tools"
 MERMAID_CONFIG = APP_ROOT / "mermaid.config.json"
 PUPPETEER_CONFIG = APP_ROOT / "puppeteer.json"
 
@@ -41,16 +40,16 @@ def _run(cmd: list[str], cwd: Path, env: dict | None = None) -> str:
         )
         return res.stdout
     except subprocess.CalledProcessError as e:
+        # Raise with full tool output
         raise HTTPException(
             500,
             f"Command failed: {' '.join(cmd)}\nSTDOUT:\n{e.stdout}\nSTDERR:\n{e.stderr}"
         )
 
 def _resolve_mmdc() -> str:
-    """Find Mermaid CLI executable ('mmdc') across platforms."""
     custom = os.getenv("MMDC_PATH")
     candidates = [c for c in [custom, "mmdc", "mmdc.cmd"] if c]
-    appdata = os.environ.get("APPDATA")  # Windows npm global bin
+    appdata = os.environ.get("APPDATA")
     if appdata:
         candidates.append(os.path.join(appdata, "npm", "mmdc.cmd"))
     for exe in candidates:
@@ -63,7 +62,6 @@ def _resolve_mmdc() -> str:
                              "or set MMDC_PATH to the full path of mmdc(.cmd).")
 
 def _safe_unzip_to(zip_bytes: bytes, dest: Path) -> None:
-    """Safely extract a .zip into dest, preventing path traversal."""
     dest.mkdir(parents=True, exist_ok=True)
     with zipfile.ZipFile(io.BytesIO(zip_bytes)) as zf:
         for member in zf.infolist():
@@ -77,6 +75,7 @@ def _safe_unzip_to(zip_bytes: bytes, dest: Path) -> None:
                 with zf.open(member) as src, open(member_path, "wb") as out:
                     shutil.copyfileobj(src, out)
 
+# --------------------------- Core ---------------------------
 def _generate(
     project_dir: Path,
     package_dir: Optional[str],
@@ -86,19 +85,19 @@ def _generate(
     include_artifacts: bool,
     graph_mode: str,
     max_hops: int,
+    layout_dir: str,
 ) -> dict:
-    """Core generation logic used by both endpoints."""
     if not project_dir.exists():
         raise HTTPException(400, f"project_dir does not exist: {project_dir}")
 
     base_env = os.environ.copy()
     base_env["PYTHONPATH"] = os.pathsep.join([
-        str(APP_ROOT),        # allow app/tools imports
-        str(project_dir),     # allow project imports (for app_module)
+        str(APP_ROOT),
+        str(project_dir),
         base_env.get("PYTHONPATH", ""),
     ])
 
-    # Resolve scan path
+    # Determine scan path
     if package_dir:
         scan_path = (project_dir / package_dir).resolve()
         if not scan_path.exists():
@@ -121,47 +120,59 @@ def _generate(
         else:
             routes_json.write_text("[]", encoding="utf-8")
 
-        # 2) Build callgraph (always fresh)
+        # 2) Build callgraph fresh
         _run([
             "python", str(TOOLS_DIR / "callgraph_ast.py"),
             str(scan_path), "--out", str(callgraph_json), "--prefix", prefix
         ], cwd=project_dir, env=base_env)
 
-        # 3) Mermaid: expects files in its cwd
+        # 3) Put inputs where mermaid.py expects them (APP_ROOT cwd)
         service_routes = APP_ROOT / "routes.json"
         service_callgraph = APP_ROOT / "callgraph.json"
         service_routes.write_text(routes_json.read_text(encoding="utf-8"), encoding="utf-8")
         service_callgraph.write_text(callgraph_json.read_text(encoding="utf-8"), encoding="utf-8")
 
-        # mode/hops for mermaid.py
+        # 3b) Generate Mermaid (SOFT-FAIL: return artifacts even if this fails)
         mermaid_env = base_env.copy()
-        mermaid_env["MERMAID_MODE"] = graph_mode
+        mermaid_env["MERMAID_MODE"] = graph_mode     # api | nhops | full
         mermaid_env["MAX_HOPS"] = str(max_hops)
+        mermaid_env["MERMAID_DIR"] = layout_dir      # LR | RL | TD | TB | BT
+        mermaid_txt = None
+        mermaid_err = None
+        try:
+            mermaid_txt = _run(["python", str(TOOLS_DIR / "mermaid.py")], cwd=APP_ROOT, env=mermaid_env)
+        except HTTPException as e:
+            mermaid_err = e.detail
 
-        mermaid_txt = _run(["python", str(TOOLS_DIR / "mermaid.py")], cwd=APP_ROOT, env=mermaid_env)
-
-        resp = {"mermaid": mermaid_txt}
+        resp = {}
         if include_artifacts:
             resp["artifacts"] = {
                 "routes.json": service_routes.read_text(encoding="utf-8"),
                 "callgraph.json": service_callgraph.read_text(encoding="utf-8"),
             }
 
-        # 4) Optional SVG rendering with robust flags (if requested)
-        if render == "svg":
-            mmd = tmp_path / "diagram.mmd"
-            svg = tmp_path / "diagram.svg"
-            mmd.write_text(mermaid_txt, encoding="utf-8")
-            mmdc = _resolve_mmdc()
+        if mermaid_txt is not None:
+            resp["mermaid"] = mermaid_txt
 
-            cmd = [mmdc, "-i", str(mmd), "-o", str(svg), "-b", "transparent", "--scale", "1"]
-            if MERMAID_CONFIG.exists():
-                cmd += ["--configFile", str(MERMAID_CONFIG)]
-            if PUPPETEER_CONFIG.exists():
-                cmd += ["--puppeteerConfigFile", str(PUPPETEER_CONFIG)]
-
-            _run(cmd, cwd=APP_ROOT, env=base_env)
-            resp.update({"svg": svg.read_text(encoding="utf-8"), "format": "svg"})
+            # 4) Optional SVG (SOFT-FAIL)
+            if render == "svg":
+                mmd = tmp_path / "diagram.mmd"
+                svg = tmp_path / "diagram.svg"
+                mmd.write_text(mermaid_txt, encoding="utf-8")
+                mmdc = _resolve_mmdc()
+                cmd = [mmdc, "-i", str(mmd), "-o", str(svg), "-b", "transparent", "--scale", "1"]
+                if MERMAID_CONFIG.exists():
+                    cmd += ["--configFile", str(MERMAID_CONFIG)]
+                if PUPPETEER_CONFIG.exists():
+                    cmd += ["--puppeteerConfigFile", str(PUPPETEER_CONFIG)]
+                try:
+                    _run(cmd, cwd=APP_ROOT, env=base_env)
+                    resp.update({"svg": svg.read_text(encoding="utf-8"), "format": "svg"})
+                except HTTPException as e:
+                    resp["svg_error"] = e.detail
+        else:
+            # Mermaid failed, but we still return artifacts and a clear error
+            resp["mermaid_error"] = mermaid_err
 
         return resp
 
@@ -173,16 +184,15 @@ class DiagramRequest(BaseModel):
     prefix: str = Field("app", description="Limit callgraph edges to this package prefix")
     render: str = Field("mermaid", pattern="^(mermaid|svg)$")
     include_artifacts: bool = True
-    graph_mode: str = Field("api", pattern="^(api|nhops|full)$",
-                            description="api=1 hop from handlers; nhops=N hops; full=all edges")
-    max_hops: int = Field(1, ge=1, description="Used only when graph_mode='nhops'")
+    graph_mode: str = Field("api", pattern="^(api|nhops|full)$")
+    max_hops: int = Field(1, ge=1)
+    layout_dir: str = Field("LR", pattern="^(TD|TB|LR|RL|BT)$", description="Flow direction")
 
-# --------------------------- Health -------------------------
+# --------------------------- Routes -------------------------
 @app.get("/health")
 def health():
     return {"ok": True}
 
-# -------- Local/mounted path flow (useful for local dev) ---
 @app.post("/api/diagram")
 def make_diagram(req: DiagramRequest, _=Depends(require_api_key)):
     return _generate(
@@ -192,11 +202,11 @@ def make_diagram(req: DiagramRequest, _=Depends(require_api_key)):
         prefix=req.prefix,
         render=req.render,
         include_artifacts=req.include_artifacts,
-        graph_mode=req.graph_mode,       # <-- pass through
-        max_hops=req.max_hops,           # <-- pass through
+        graph_mode=req.graph_mode,
+        max_hops=req.max_hops,
+        layout_dir=req.layout_dir,
     )
 
-# ------------- Hosted flow: upload a .zip of the project ---------------
 @app.post("/api/diagram-zip")
 async def make_diagram_zip(
     file: UploadFile = File(..., description="Zip of the project directory"),
@@ -207,11 +217,11 @@ async def make_diagram_zip(
     include_artifacts: bool = Form(True),
     graph_mode: str = Form("api"),
     max_hops: int = Form(1),
+    layout_dir: str = Form("LR"),
     _=Depends(require_api_key),
 ):
     if render not in ("mermaid", "svg"):
         raise HTTPException(422, "render must be 'mermaid' or 'svg'")
-
     with tempfile.TemporaryDirectory() as tmp:
         proj_dir = Path(tmp) / "project"
         zip_bytes = await file.read()
@@ -225,4 +235,6 @@ async def make_diagram_zip(
             include_artifacts=include_artifacts,
             graph_mode=graph_mode,
             max_hops=max_hops,
+            layout_dir=layout_dir,
         )
+
