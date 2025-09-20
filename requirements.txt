@@ -3,3 +3,4 @@ uvicorn[standard]==0.30.6
 pydantic==2.10.7
 python-dotenv==1.0.1
 graphviz==0.20.1
+python-multipart==0.0.6
