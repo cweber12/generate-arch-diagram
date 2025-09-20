@@ -19,43 +19,66 @@ notepad $PROFILE
 ### ADD FUNCTION
 
 ```bash
-function New-ArchDiagram {
+function ArchDiagram {
   param(
+    [string]$ApiBase    = "http://localhost:8911",
+    [string]$ProjectDir = (Get-Location).Path,
+    [string]$PackageDir = "app",
+    [string]$Prefix     = "app",
     [ValidateSet("mermaid","svg")] [string]$Render = "mermaid",
-    [string]$Prefix = "app",
-    [string]$AppModule,
-    [string]$ApiBase = "http://localhost:8911"  
+    [ValidateSet("api","nhops","full")] [string]$GraphMode = "api",
+    [int]$MaxHops = 1,
+    [string]$AppModule
   )
 
-  if (-not $env:DIAGRAM_API_KEY) {
-    throw "Set `$env:DIAGRAM_API_KEY (plaintext key) first:  `$env:DIAGRAM_API_KEY = 'BbsGmr7W6UTslHPcf0ojniLzcxjP0nMSG5nS7Jx5jbY'"
-  }
+  if (-not $env:DIAGRAM_API_KEY) { throw "Set `$env:DIAGRAM_API_KEY (plaintext key) first." }
 
   $payload = @{
-    project_dir = (Get-Location).Path
-    prefix      = $Prefix
-    render      = $Render
+    project_dir       = $ProjectDir
+    package_dir       = $PackageDir
+    prefix            = $Prefix
+    render            = $Render
+    include_artifacts = $true
+    graph_mode        = $GraphMode
+    max_hops          = $MaxHops
   }
   if ($AppModule) { $payload.app_module = $AppModule }
 
-  $json = $payload | ConvertTo-Json
+  $json = $payload | ConvertTo-Json -Compress
+
+  $params = @{
+    Uri         = "$ApiBase/api/diagram"
+    Method      = 'POST'
+    Headers     = @{ 'X-API-Key' = $env:DIAGRAM_API_KEY }
+    ContentType = 'application/json'
+    Body        = $json
+    ErrorAction = 'Stop'
+  }
 
   try {
-    $resp = Invoke-RestMethod -Uri "$ApiBase/api/diagram" -Method POST `
-            -Headers @{ "X-API-Key"=$env:DIAGRAM_API_KEY; "Content-Type"="application/json" } `
-            -Body $json
+    $resp = Invoke-RestMethod @params
 
-    if ($resp.svg) {
-      Set-Content -Path ".\diagram.svg" -Value $resp.svg -Encoding UTF8
-      Write-Host "Wrote diagram.svg" -ForegroundColor Green
-    } elseif ($resp.mermaid) {
-      Set-Content -Path ".\diagram.mmd" -Value $resp.mermaid -Encoding UTF8
-      Write-Host "Wrote diagram.mmd" -ForegroundColor Green
-    } else {
-      Write-Host "No diagram returned." -ForegroundColor Yellow
+    if ($null -ne $resp.mermaid) {
+      Set-Content -Path (Join-Path $ProjectDir "diagram.mmd") -Value $resp.mermaid -Encoding UTF8
+      $mdText = @('```mermaid', ($resp.mermaid.TrimEnd()), '```') -join "`r`n"
+      Set-Content -Path (Join-Path $ProjectDir "diagram.md") -Value $mdText -Encoding UTF8
+      Write-Host "Wrote diagram.mmd, diagram.md" -ForegroundColor Green
     }
-  }
-  catch {
+    if ($null -ne $resp.svg) {
+      Set-Content -Path (Join-Path $ProjectDir "diagram.svg") -Value $resp.svg -Encoding UTF8
+      Write-Host "Wrote diagram.svg" -ForegroundColor Green
+    } elseif ($Render -eq "svg") {
+      Write-Host "Server did not return SVG (is Mermaid CLI available on server?). Saved .mmd/.md." -ForegroundColor Yellow
+    }
+    if ($resp.artifacts.'routes.json') {
+      Set-Content -Path (Join-Path $ProjectDir "routes.json") -Value $resp.artifacts.'routes.json' -Encoding UTF8
+      Write-Host "Wrote routes.json" -ForegroundColor Green
+    }
+    if ($resp.artifacts.'callgraph.json') {
+      Set-Content -Path (Join-Path $ProjectDir "callgraph.json") -Value $resp.artifacts.'callgraph.json' -Encoding UTF8
+      Write-Host "Wrote callgraph.json" -ForegroundColor Green
+    }
+  } catch {
     Write-Host "Request failed:" -ForegroundColor Red
     $_ | Out-String | Write-Host
   }
