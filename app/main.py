@@ -1,4 +1,8 @@
 # app/main.py
+# ------------------------------------------------------------------------------
+# FastAPI service to generate architecture diagrams from a FastAPI project
+# ------------------------------------------------------------------------------
+
 from fastapi import FastAPI, HTTPException, Depends, Security, UploadFile, File, Form
 from fastapi.security import APIKeyHeader
 from pydantic import BaseModel, Field
@@ -12,12 +16,15 @@ load_dotenv(find_dotenv(), override=False)
 app = FastAPI(title="Architecture Diagram Service", version="0.5.0")
 
 # --------------------------- Auth ---------------------------
+
+# Simple API key auth via X-API-Key header, SHA256 hashed in env var
 API_KEY_HEADER = "X-API-Key"
 api_key_header = APIKeyHeader(name=API_KEY_HEADER, auto_error=False)
 API_KEY_SHA256 = os.getenv("API_KEY_SHA256")
 if not API_KEY_SHA256:
     raise RuntimeError("Missing API_KEY_SHA256 env var")
 
+# Function to require and validate the API key
 def require_api_key(api_key: Optional[str] = Security(api_key_header)) -> None:
     if not api_key:
         raise HTTPException(401, "Missing API key", headers={"WWW-Authenticate": "ApiKey"})
@@ -26,12 +33,15 @@ def require_api_key(api_key: Optional[str] = Security(api_key_header)) -> None:
         raise HTTPException(401, "Invalid API key", headers={"WWW-Authenticate": "ApiKey"})
 
 # --------------------------- Paths --------------------------
+
 APP_ROOT = Path(__file__).resolve().parent
 TOOLS_DIR = APP_ROOT / "tools"
 MERMAID_CONFIG = APP_ROOT / "mermaid.config.json"
 PUPPETEER_CONFIG = APP_ROOT / "puppeteer.json"
 
 # -------------------------- Helpers -------------------------
+
+# Run a command, raise HTTPException on failure
 def _run(cmd: list[str], cwd: Path, env: dict | None = None) -> str:
     try:
         res = subprocess.run(
@@ -46,6 +56,7 @@ def _run(cmd: list[str], cwd: Path, env: dict | None = None) -> str:
             f"Command failed: {' '.join(cmd)}\nSTDOUT:\n{e.stdout}\nSTDERR:\n{e.stderr}"
         )
 
+# Locate mmdc (Mermaid CLI) executable
 def _resolve_mmdc() -> str:
     custom = os.getenv("MMDC_PATH")
     candidates = [c for c in [custom, "mmdc", "mmdc.cmd"] if c]
@@ -61,6 +72,7 @@ def _resolve_mmdc() -> str:
     raise HTTPException(500, "Mermaid CLI not found. Install with: npm i -g @mermaid-js/mermaid-cli "
                              "or set MMDC_PATH to the full path of mmdc(.cmd).")
 
+# Safely unzip bytes to a destination directory to prevent path traversal
 def _safe_unzip_to(zip_bytes: bytes, dest: Path) -> None:
     dest.mkdir(parents=True, exist_ok=True)
     with zipfile.ZipFile(io.BytesIO(zip_bytes)) as zf:
@@ -76,6 +88,8 @@ def _safe_unzip_to(zip_bytes: bytes, dest: Path) -> None:
                     shutil.copyfileobj(src, out)
 
 # --------------------------- Core ---------------------------
+
+# Main generation function
 def _generate(
     project_dir: Path,
     package_dir: Optional[str],
@@ -189,10 +203,13 @@ class DiagramRequest(BaseModel):
     layout_dir: str = Field("LR", pattern="^(TD|TB|LR|RL|BT)$", description="Flow direction")
 
 # --------------------------- Routes -------------------------
+
+# Health check
 @app.get("/health")
 def health():
     return {"ok": True}
 
+# Generate diagram from a live project directory
 @app.post("/api/diagram")
 def make_diagram(req: DiagramRequest, _=Depends(require_api_key)):
     return _generate(
@@ -207,6 +224,7 @@ def make_diagram(req: DiagramRequest, _=Depends(require_api_key)):
         layout_dir=req.layout_dir,
     )
 
+# Generate diagram from an uploaded zip of the project directory
 @app.post("/api/diagram-zip")
 async def make_diagram_zip(
     file: UploadFile = File(..., description="Zip of the project directory"),

@@ -1,4 +1,8 @@
 # tools/callgraph_ast.py
+# ------------------------------------------------------------------------------
+# Static call graph extraction using AST parsing
+# ------------------------------------------------------------------------------
+
 from __future__ import annotations
 import ast, json, sys
 from pathlib import Path
@@ -33,6 +37,8 @@ class CGVisitor(ast.NodeVisitor):
         self.edges: Set[Tuple[str, str]] = set()
 
     # --- defs & imports ---
+
+    # Handle 'import ...' style imports
     def visit_Import(self, node: ast.Import) -> None:
         for alias in node.names:
             if alias.asname:
@@ -42,6 +48,7 @@ class CGVisitor(ast.NodeVisitor):
                 self.alias_to_module[head] = head
         self.generic_visit(node)
 
+    # Handle 'from . import ...' style imports
     def visit_ImportFrom(self, node: ast.ImportFrom) -> None:
         mod = node.module or ""
         fqmod = resolve_relative(self.modname, mod, node.level or 0)
@@ -55,15 +62,18 @@ class CGVisitor(ast.NodeVisitor):
             self.alias_to_module[name] = f"{fqmod}.{base}"
         self.generic_visit(node)
 
+    # Handle function and class definitions
     def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
         fq = f"{self.modname}.{node.name}"
         self.scope_stack.append(fq)
         self.generic_visit(node)
         self.scope_stack.pop()
 
+    # Handle async function definitions
     def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:
         self.visit_FunctionDef(node)
 
+    # Handle class definitions and their methods
     def visit_ClassDef(self, node: ast.ClassDef) -> None:
         # record methods as mod.Class.method
         for item in node.body:
@@ -78,6 +88,8 @@ class CGVisitor(ast.NodeVisitor):
                 self.visit(item)
 
     # --- calls ---
+
+    # Handle function call expressions
     def visit_Call(self, node: ast.Call) -> None:
         if not self.scope_stack:
             # calls at module import time: ignore for now
@@ -89,6 +101,7 @@ class CGVisitor(ast.NodeVisitor):
             self.edges.add((caller, callee_fq))
         self.generic_visit(node)
 
+    # Resolve the callee function to a fully-qualified name if possible
     def _resolve_callee(self, func: ast.AST) -> Optional[str]:
         # f(...)
         if isinstance(func, ast.Name):
@@ -128,6 +141,7 @@ class CGVisitor(ast.NodeVisitor):
                 return chain
         return None
 
+    # Extract full attribute chain as a dot-separated string, if possible
     def _attr_chain(self, node: ast.Attribute) -> Optional[str]:
         parts: List[str] = []
         cur: ast.AST = node
@@ -140,6 +154,8 @@ class CGVisitor(ast.NodeVisitor):
         return None
 
 # -------- driver --------
+
+# Collect all function defs in the project for reference
 def collect_defs(root: Path, pkg_root: Path) -> Set[str]:
     """Collect all function defs under root as fully-qualified names."""
     defs: Set[str] = set()

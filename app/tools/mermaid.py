@@ -1,4 +1,8 @@
 # app/tools/mermaid.py
+# ------------------------------------------------------------------------------
+# Generate a Mermaid flowchart from FastAPI routes and a callgraph
+# ------------------------------------------------------------------------------
+
 import os, json, re
 from pathlib import Path
 from collections import defaultdict, deque
@@ -15,22 +19,26 @@ LABEL_MODE = os.getenv("LABEL_MODE", "short")   # "short" | "full"
 LABEL_DEPTH = int(os.getenv("LABEL_DEPTH", "2"))# used when LABEL_MODE="short"
 WRAP_BY_DOT = os.getenv("WRAP_BY_DOT", "1") == "1"
 
+# Load routes from routes.json
 def load_routes():
     if not routes_path.exists():
         return []
     with routes_path.open(encoding="utf-8-sig") as f:
         return json.load(f)
 
+# Load callgraph from callgraph.json
 def load_callgraph():
     if not callgraph_path.exists():
         return {"edges": []}
     with callgraph_path.open(encoding="utf-8-sig") as f:
         return json.load(f)
 
+# Helpers to make safe IDs and labels
 _id_re = re.compile(r'[^A-Za-z0-9_]')
 def safe_id(s: str) -> str:
     return _id_re.sub("_", s)
 
+# Shorten a qualified name based on the label mode and depth
 def shorten_label(qualified: str) -> str:
     if LABEL_MODE == "short":
         parts = qualified.split(".")
@@ -40,12 +48,15 @@ def shorten_label(qualified: str) -> str:
         return qualified.replace(".", "<br/>")
     return qualified
 
+# Escape quotes in a string for Mermaid
 def esc(s: str) -> str:
     return s.replace('"', '\\"')
 
+# Node IDs
 def fn_node(fn: str) -> str:
     return f"FN_{safe_id(fn)}"
 
+# Endpoint node IDs
 def ep_node(method: str, path: str) -> str:
     return f"EP_{safe_id(method + '_' + path)}"
 

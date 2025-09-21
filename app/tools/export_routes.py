@@ -1,4 +1,8 @@
 # tools/export_routes.py
+# ------------------------------------------------------------------------------
+# Extract FastAPI routes and their metadata to a JSON file
+# ------------------------------------------------------------------------------
+
 from __future__ import annotations
 import os, sys, json, importlib, traceback, logging, warnings
 from pathlib import Path
@@ -13,6 +17,7 @@ for name in ("botocore", "boto3", "numpy", "PIL", "uvicorn"):
 logging.getLogger().setLevel(logging.CRITICAL)
 warnings.filterwarnings("ignore")
 
+# Import FastAPI and related classes
 try:
     from fastapi import FastAPI
     from fastapi.routing import APIRoute
@@ -20,13 +25,18 @@ except Exception as e:
     print(f"[export_routes] FastAPI import failed: {e}", file=sys.stderr)
     raise
 
+# Ensure project root is in sys.path
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+# -------- helper functions --------
+
+# Helper to print error and exit
 def die(msg: str, code: int = 2) -> None:
     print(msg, file=sys.stderr); raise SystemExit(code)
 
+# Load the FastAPI app from the specified module
 def load_app(app_spec: str) -> FastAPI:
     if ":" not in app_spec:
         app_spec += ":app"
@@ -47,16 +57,19 @@ def load_app(app_spec: str) -> FastAPI:
             traceback.print_exc()
             die(f"[export_routes] Module '{mod_name}' has no attr '{var_name}'")
 
+    # verify it's a FastAPI instance
     if not isinstance(app_obj, FastAPI):
         die(f"[export_routes] {mod_name}:{var_name} is not a FastAPI instance (got {type(app_obj)})")
     return app_obj
 
+# Safely get the __name__ attribute of an object, if it exists
 def safe_name(obj) -> str | None:
     try:
         return getattr(obj, "__name__", None)
     except Exception:
         return None
 
+# Extract route information into a dictionary
 def route_info(r: APIRoute) -> Dict:
     # Everything behind try/except so one quirky route doesn’t kill the run
     try:
