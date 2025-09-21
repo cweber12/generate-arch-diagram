@@ -1,0 +1,48 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+*.egg-info/
+.eggs/
+dist/
+build/
+pip-wheel-metadata/
+
+# Virtual envs & local env files
+.venv/
+env/
+venv/
+.env
+.env.*
+!.env.example
+
+# Node
+node_modules/
+npm-debug.log*
+yarn.lock
+pnpm-lock.yaml
+
+# VCS / OS junk
+.git/
+.gitignore
+.gitattributes
+.DS_Store
+Thumbs.db
+
+# Editors
+.vscode/
+.idea/
+
+# Generated artifacts
+diagram.mmd
+diagram.md
+diagram.svg
+routes.json
+callgraph.json
+diagram_error.txt
+
+# Misc 
+scripts/
+user_key.txt
